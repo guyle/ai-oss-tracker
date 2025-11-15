@@ -1,0 +1,386 @@
+---
+description: Main project rules and guidelines for GitHub AI Trending Tracker
+globs:
+  - "src/**/*.ts"
+alwaysApply: true
+---
+
+# GitHub AI Trending Tracker - Cursor Rules
+
+## Project Overview
+This is a Node.js/TypeScript application that tracks trending AI open source projects on GitHub. It collects project metadata, stores time-series metrics, and provides a REST API for analytics.
+
+## Tech Stack
+- **Runtime**: Node.js 20+
+- **Language**: TypeScript 5+
+- **Database**: PostgreSQL 15+ with raw SQL queries
+- **Framework**: Express.js
+- **GitHub API**: @octokit/rest
+- **Scheduler**: node-cron
+
+## Architecture Principles
+
+### Layered Architecture
+- **Routes** → **Controllers** → **Services** → **Repositories** → **Database**
+- Each layer has a single responsibility
+- Data flows downward, dependencies are injected
+- Never skip layers (e.g., don't query database from controller)
+
+### Service Layer Pattern
+```typescript
+// Services contain business logic
+class ProjectService {
+  constructor(private projectRepo: ProjectRepository) {}
+  
+  async getProject(id: number): Promise<Project> {
+    // Business logic here
+  }
+}
+```
+
+### Repository Pattern
+```typescript
+// Repositories handle database operations
+class ProjectRepository {
+  async findById(id: number): Promise<Project | null> {
+    const result = await query('SELECT * FROM projects WHERE id = $1', [id]);
+    return result.rows[0] || null;
+  }
+}
+```
+
+## Code Style Guidelines
+
+### TypeScript
+- **Strict mode**: Always enabled
+- **Type annotations**: Use for function parameters and return types
+- **Avoid `any`**: Use `unknown` if type is truly unknown
+- **Interfaces over types**: Use interfaces for object shapes
+- **Enums for constants**: Use string enums for API constants
+
+```typescript
+// Good
+interface Project {
+  id: number;
+  fullName: string;
+  language: string | null;
+}
+
+function getProject(id: number): Promise<Project> {
+  // implementation
+}
+
+// Bad
+function getProject(id) {
+  // implementation
+}
+```
+
+### Naming Conventions
+- **Files**: kebab-case (`project.service.ts`, `github-api.ts`)
+- **Classes**: PascalCase (`ProjectService`, `GitHubClient`)
+- **Functions/Variables**: camelCase (`getProject`, `totalStars`)
+- **Constants**: UPPER_SNAKE_CASE (`MAX_RETRIES`, `API_BASE_URL`)
+- **Private members**: Prefix with underscore (`_cache`, `_validate`)
+
+### Error Handling
+- Always use try-catch for async operations
+- Create custom error classes for different error types
+- Log errors with context before re-throwing
+- Never swallow errors silently
+
+```typescript
+// Good
+try {
+  const data = await githubService.getRepo(owner, repo);
+  return data;
+} catch (error) {
+  logger.error('Failed to fetch repository', { owner, repo, error });
+  throw new GitHubApiError(`Failed to fetch ${owner}/${repo}`, error);
+}
+
+// Bad
+try {
+  const data = await githubService.getRepo(owner, repo);
+  return data;
+} catch (error) {
+  console.log(error); // Don't use console.log
+  return null; // Don't hide errors
+}
+```
+
+### Async/Await
+- Prefer async/await over Promise chains
+- Handle Promise rejections
+- Use Promise.all for parallel operations
+- Never use async without await (remove async keyword)
+
+```typescript
+// Good - parallel execution
+const [repo, topics] = await Promise.all([
+  githubService.getRepo(owner, name),
+  githubService.getTopics(owner, name)
+]);
+
+// Bad - sequential execution
+const repo = await githubService.getRepo(owner, name);
+const topics = await githubService.getTopics(owner, name);
+```
+
+## Database Guidelines
+
+### Query Patterns
+- Use parameterized queries to prevent SQL injection
+- Always handle query errors
+- Use transactions for multi-step operations
+- Close connections properly
+
+```typescript
+// Good - parameterized query
+const result = await query(
+  'SELECT * FROM projects WHERE language = $1 AND stars_count > $2',
+  [language, minStars]
+);
+
+// Bad - string concatenation (SQL injection risk!)
+const result = await query(
+  `SELECT * FROM projects WHERE language = '${language}'`
+);
+```
+
+### Performance
+- Add indexes on frequently queried columns
+- Limit result sets with LIMIT and OFFSET
+- Use EXPLAIN ANALYZE to debug slow queries
+- Avoid N+1 queries - use JOINs or batch queries
+
+### Transactions
+```typescript
+// Use transactions for related operations
+const client = await pool.connect();
+try {
+  await client.query('BEGIN');
+  await client.query('INSERT INTO projects ...');
+  await client.query('INSERT INTO project_metrics ...');
+  await client.query('COMMIT');
+} catch (error) {
+  await client.query('ROLLBACK');
+  throw error;
+} finally {
+  client.release();
+}
+```
+
+## API Design Guidelines
+
+### RESTful Conventions
+- Use plural nouns for resources (`/projects`, not `/project`)
+- Use HTTP methods correctly (GET, POST, PUT, DELETE)
+- Return appropriate status codes
+- Include pagination for list endpoints
+
+### Request Validation
+- Validate all input parameters
+- Return 400 for invalid requests with clear error messages
+- Use query parameters for filtering/pagination
+- Use request body for create/update operations
+
+```typescript
+// Validate input
+const page = parseInt(req.query.page as string) || 1;
+if (page < 1) {
+  return res.status(400).json({
+    error: { code: 'VALIDATION_ERROR', message: 'Page must be >= 1' }
+  });
+}
+```
+
+### Response Format
+```typescript
+// Success response
+{
+  "data": [...],
+  "pagination": {
+    "page": 1,
+    "limit": 50,
+    "total": 150
+  }
+}
+
+// Error response
+{
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "Project not found",
+    "details": {}
+  }
+}
+```
+
+## GitHub API Integration
+
+### Rate Limiting
+- Authenticated requests: 5000/hour
+- Use Octokit's throttling plugin
+- Implement retry with exponential backoff
+- Track and log rate limit usage
+
+```typescript
+// Check rate limit before batch operations
+const rateLimit = await octokit.rateLimit.get();
+if (rateLimit.data.rate.remaining < 100) {
+  logger.warn('GitHub API rate limit low', {
+    remaining: rateLimit.data.rate.remaining
+  });
+}
+```
+
+### Best Practices
+- Cache responses when appropriate (15-minute TTL)
+- Use conditional requests (If-Modified-Since)
+- Handle 403 (rate limit) and 404 (not found) gracefully
+- Add delay between requests in batch operations
+
+## Logging
+
+### Winston Logger
+```typescript
+import { logger } from '@/utils/logger';
+
+// Different log levels
+logger.debug('Debug info', { metadata });  // Development only
+logger.info('Info message');                // General info
+logger.warn('Warning', { context });        // Warnings
+logger.error('Error occurred', error);      // Errors
+```
+
+### What to Log
+- **Always**: Errors with full context
+- **Info**: Job start/completion, API requests
+- **Debug**: Detailed operation steps (dev only)
+- **Never**: Sensitive data (tokens, passwords)
+
+## Testing
+
+### Test Structure
+```typescript
+describe('ProjectService', () => {
+  let service: ProjectService;
+  
+  beforeEach(() => {
+    service = new ProjectService();
+  });
+  
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+  
+  test('should create project successfully', async () => {
+    // Arrange
+    const mockData = { ... };
+    
+    // Act
+    const result = await service.createProject(mockData);
+    
+    // Assert
+    expect(result.id).toBeDefined();
+  });
+});
+```
+
+### Mocking
+- Mock external dependencies (GitHub API, database)
+- Use jest.mock() for module mocking
+- Verify mock calls with expect().toHaveBeenCalledWith()
+
+## Environment Variables
+- Never commit .env files
+- Validate required env vars on startup
+- Use dotenv for local development
+- Document all env vars in .env.example
+
+## Security
+- Never log sensitive data
+- Validate all user input
+- Use helmet middleware for HTTP security
+- Enable CORS only for trusted origins
+- Rate limit API endpoints
+
+## Performance
+- Use connection pooling for database
+- Batch GitHub API requests
+- Cache frequently accessed data
+- Add indexes for common queries
+- Monitor query performance
+
+## Documentation
+- Add JSDoc comments for public functions
+- Document complex logic with inline comments
+- Keep README.md up to date
+- Document API endpoints in api-design.md
+
+## Common Patterns to Follow
+
+### Service Method Pattern
+```typescript
+async function updateProjectMetrics(projectId: number): Promise<void> {
+  try {
+    // 1. Fetch data
+    const project = await projectRepo.findById(projectId);
+    if (!project) throw new NotFoundError('Project not found');
+    
+    // 2. Call external API
+    const [owner, repo] = project.fullName.split('/');
+    const repoData = await githubService.getRepo(owner, repo);
+    
+    // 3. Process data
+    const metrics = {
+      stars: repoData.stargazers_count,
+      forks: repoData.forks_count,
+      // ...
+    };
+    
+    // 4. Save to database
+    await metricsRepo.create(projectId, metrics);
+    
+    // 5. Log success
+    logger.info('Metrics updated', { projectId, stars: metrics.stars });
+  } catch (error) {
+    logger.error('Failed to update metrics', { projectId, error });
+    throw error;
+  }
+}
+```
+
+### Controller Pattern
+```typescript
+async function getProjects(req: Request, res: Response, next: NextFunction) {
+  try {
+    // 1. Extract and validate params
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+    
+    // 2. Call service
+    const result = await projectService.getProjects({ page, limit });
+    
+    // 3. Format response
+    res.json({
+      data: result.projects,
+      pagination: {
+        page,
+        limit,
+        total: result.total
+      }
+    });
+  } catch (error) {
+    // 4. Pass to error handler
+    next(error);
+  }
+}
+```
+
+## When to Ask for Help
+- Unsure about database schema changes → Review database-schema.md
+- API endpoint design questions → Check api-design.md
+- Architecture questions → Refer to this file's Architecture Principles
+- Implementation details → See implementation-guide.md

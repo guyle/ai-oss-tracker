@@ -1,0 +1,486 @@
+---
+description: Database interaction patterns and SQL best practices
+globs:
+  - "src/repositories/**/*.ts"
+  - "src/db/**/*.sql"
+alwaysApply: false
+---
+
+# Database Rules for GitHub AI Tracker
+
+## Database Connection
+
+### Connection Pool Configuration
+```typescript
+import { Pool } from 'pg';
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 20,                    // Maximum pool size
+  idleTimeoutMillis: 30000,   // Close idle connections after 30s
+  connectionTimeoutMillis: 2000, // Fail fast if can't connect
+});
+
+// Handle pool errors
+pool.on('error', (err) => {
+  logger.error('Unexpected database error', err);
+});
+```
+
+### Query Helper
+```typescript
+export const query = async (text: string, params?: any[]) => {
+  const start = Date.now();
+  try {
+    const result = await pool.query(text, params);
+    const duration = Date.now() - start;
+    logger.debug('Query executed', { text, duration, rows: result.rowCount });
+    return result;
+  } catch (error) {
+    logger.error('Query error', { text, params, error });
+    throw error;
+  }
+};
+```
+
+## SQL Query Patterns
+
+### Parameterized Queries (ALWAYS)
+```typescript
+// ✅ GOOD - Parameterized query prevents SQL injection
+const result = await query(
+  'SELECT * FROM projects WHERE language = $1 AND stars_count > $2',
+  [language, minStars]
+);
+
+// ❌ BAD - String concatenation opens SQL injection vulnerability
+const result = await query(
+  `SELECT * FROM projects WHERE language = '${language}'`
+);
+```
+
+### INSERT with RETURNING
+```typescript
+// Return inserted row
+const result = await query(
+  `INSERT INTO projects (github_id, full_name, name, description)
+   VALUES ($1, $2, $3, $4)
+   RETURNING *`,
+  [githubId, fullName, name, description]
+);
+const project = result.rows[0];
+```
+
+### UPSERT (INSERT ... ON CONFLICT)
+```typescript
+// Update if exists, insert if not
+const result = await query(
+  `INSERT INTO projects (github_id, full_name, updated_at)
+   VALUES ($1, $2, $3)
+   ON CONFLICT (github_id)
+   DO UPDATE SET
+     updated_at = EXCLUDED.updated_at,
+     last_synced_at = CURRENT_TIMESTAMP
+   RETURNING *`,
+  [githubId, fullName, updatedAt]
+);
+```
+
+### Pagination
+```typescript
+// Always use LIMIT and OFFSET
+const result = await query(
+  `SELECT * FROM projects
+   ORDER BY stars_count DESC
+   LIMIT $1 OFFSET $2`,
+  [limit, offset]
+);
+
+// Get total count for pagination
+const countResult = await query(
+  'SELECT COUNT(*) as total FROM projects WHERE language = $1',
+  [language]
+);
+const total = parseInt(countResult.rows[0].total);
+```
+
+### Array Queries (PostgreSQL)
+```typescript
+// Filter by array contains
+const result = await query(
+  `SELECT * FROM projects WHERE topics @> $1`,
+  [JSON.stringify(['ai', 'machine-learning'])]
+);
+
+// Check if array contains any value
+const result = await query(
+  `SELECT * FROM projects WHERE topics && $1`,
+  [['ai', 'llm']]
+);
+```
+
+### Date Range Queries
+```typescript
+// Get metrics within date range
+const result = await query(
+  `SELECT * FROM project_metrics
+   WHERE project_id = $1
+     AND recorded_at BETWEEN $2 AND $3
+   ORDER BY recorded_at DESC`,
+  [projectId, startDate, endDate]
+);
+
+// Recent data (last 7 days)
+const result = await query(
+  `SELECT * FROM project_metrics
+   WHERE recorded_at > NOW() - INTERVAL '7 days'`
+);
+```
+
+### JOINs
+```typescript
+// Get projects with latest metrics
+const result = await query(
+  `SELECT 
+     p.*,
+     pm.stars_count,
+     pm.stars_velocity,
+     pm.recorded_at as metrics_updated_at
+   FROM projects p
+   JOIN LATERAL (
+     SELECT *
+     FROM project_metrics
+     WHERE project_id = p.id
+     ORDER BY recorded_at DESC
+     LIMIT 1
+   ) pm ON true
+   WHERE p.language = $1`,
+  [language]
+);
+```
+
+### Aggregations
+```typescript
+// Calculate statistics
+const result = await query(
+  `SELECT 
+     language,
+     COUNT(*) as project_count,
+     SUM(stars_count) as total_stars,
+     AVG(stars_velocity) as avg_velocity
+   FROM current_project_stats
+   GROUP BY language
+   ORDER BY total_stars DESC`
+);
+```
+
+## Transactions
+
+### Basic Transaction
+```typescript
+async function createProjectWithMetrics(projectData, metricsData) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    
+    // Insert project
+    const projectResult = await client.query(
+      'INSERT INTO projects (...) VALUES (...) RETURNING id',
+      projectData
+    );
+    const projectId = projectResult.rows[0].id;
+    
+    // Insert metrics
+    await client.query(
+      'INSERT INTO project_metrics (project_id, ...) VALUES ($1, ...)',
+      [projectId, ...metricsData]
+    );
+    
+    await client.query('COMMIT');
+    return projectId;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    logger.error('Transaction failed', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+```
+
+### Transaction Isolation Levels
+```typescript
+// For critical operations, use higher isolation level
+await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+```
+
+## Repository Pattern
+
+### Repository Class Structure
+```typescript
+export class ProjectRepository {
+  async findById(id: number): Promise<Project | null> {
+    const result = await query(
+      'SELECT * FROM projects WHERE id = $1',
+      [id]
+    );
+    return result.rows[0] || null;
+  }
+
+  async findByGithubId(githubId: number): Promise<Project | null> {
+    const result = await query(
+      'SELECT * FROM projects WHERE github_id = $1',
+      [githubId]
+    );
+    return result.rows[0] || null;
+  }
+
+  async findAll(filters: ProjectFilters): Promise<Project[]> {
+    const { sql, params } = this.buildFilterQuery(filters);
+    const result = await query(sql, params);
+    return result.rows;
+  }
+
+  async create(data: CreateProjectDto): Promise<Project> {
+    const result = await query(
+      `INSERT INTO projects (github_id, full_name, name, ...)
+       VALUES ($1, $2, $3, ...)
+       RETURNING *`,
+      [data.githubId, data.fullName, data.name, ...]
+    );
+    return result.rows[0];
+  }
+
+  async update(id: number, data: UpdateProjectDto): Promise<Project> {
+    const result = await query(
+      `UPDATE projects 
+       SET name = $2, description = $3, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1
+       RETURNING *`,
+      [id, data.name, data.description]
+    );
+    return result.rows[0];
+  }
+
+  async delete(id: number): Promise<void> {
+    await query('DELETE FROM projects WHERE id = $1', [id]);
+  }
+
+  private buildFilterQuery(filters: ProjectFilters) {
+    let sql = 'SELECT * FROM projects WHERE 1=1';
+    const params: any[] = [];
+    let paramCount = 1;
+
+    if (filters.language) {
+      sql += ` AND language = $${paramCount}`;
+      params.push(filters.language);
+      paramCount++;
+    }
+
+    if (filters.topics?.length) {
+      sql += ` AND topics @> $${paramCount}`;
+      params.push(JSON.stringify(filters.topics));
+      paramCount++;
+    }
+
+    sql += ` ORDER BY ${filters.sortBy || 'id'} ${filters.order || 'DESC'}`;
+    sql += ` LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
+    params.push(filters.limit || 50, filters.offset || 0);
+
+    return { sql, params };
+  }
+}
+```
+
+## Performance Optimization
+
+### Indexes
+```sql
+-- Create indexes for frequently queried columns
+CREATE INDEX idx_projects_language ON projects(language);
+CREATE INDEX idx_projects_created_at ON projects(created_at);
+CREATE INDEX idx_projects_topics ON projects USING GIN(topics);
+
+-- Composite indexes for common query patterns
+CREATE INDEX idx_project_metrics_project_recorded 
+  ON project_metrics(project_id, recorded_at DESC);
+```
+
+### Query Optimization
+```typescript
+// ✅ GOOD - Use EXPLAIN ANALYZE to understand query performance
+const result = await query('EXPLAIN ANALYZE SELECT ...');
+console.log(result.rows);
+
+// ✅ GOOD - Limit result sets
+const result = await query('SELECT * FROM projects LIMIT 100');
+
+// ❌ BAD - Fetching all rows
+const result = await query('SELECT * FROM projects');
+
+// ✅ GOOD - Select only needed columns
+const result = await query('SELECT id, full_name, stars_count FROM projects');
+
+// ❌ BAD - Select all columns when not needed
+const result = await query('SELECT * FROM projects');
+```
+
+### Batch Operations
+```typescript
+// Insert multiple rows efficiently
+async function batchInsertMetrics(metrics: Metrics[]) {
+  if (metrics.length === 0) return;
+
+  // Build VALUES clause
+  const values = metrics.map((m, i) => {
+    const offset = i * 5;
+    return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5})`;
+  }).join(', ');
+
+  const params = metrics.flatMap(m => [
+    m.projectId,
+    m.starsCount,
+    m.forksCount,
+    m.watchersCount,
+    m.openIssuesCount
+  ]);
+
+  await query(
+    `INSERT INTO project_metrics 
+     (project_id, stars_count, forks_count, watchers_count, open_issues_count)
+     VALUES ${values}`,
+    params
+  );
+}
+```
+
+## Migrations
+
+### Migration File Structure
+```sql
+-- migrations/001_initial_schema.sql
+BEGIN;
+
+CREATE TABLE IF NOT EXISTS projects (
+  id SERIAL PRIMARY KEY,
+  github_id BIGINT UNIQUE NOT NULL,
+  full_name VARCHAR(255) UNIQUE NOT NULL,
+  -- ... other columns
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Add indexes
+CREATE INDEX idx_projects_github_id ON projects(github_id);
+
+COMMIT;
+```
+
+### Migration Runner
+```typescript
+// scripts/run-migrations.ts
+import { query } from '../src/config/database';
+import fs from 'fs';
+import path from 'path';
+
+async function runMigrations() {
+  const migrationsDir = path.join(__dirname, '../src/db/migrations');
+  const files = fs.readdirSync(migrationsDir).sort();
+
+  for (const file of files) {
+    if (!file.endsWith('.sql')) continue;
+    
+    console.log(`Running migration: ${file}`);
+    const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
+    
+    try {
+      await query(sql);
+      console.log(`✓ ${file} completed`);
+    } catch (error) {
+      console.error(`✗ ${file} failed:`, error);
+      throw error;
+    }
+  }
+}
+
+runMigrations();
+```
+
+## Error Handling
+
+### Database Errors
+```typescript
+try {
+  await query('INSERT INTO projects ...', params);
+} catch (error: any) {
+  // Handle specific PostgreSQL errors
+  if (error.code === '23505') { // Unique violation
+    throw new DuplicateError('Project already exists');
+  } else if (error.code === '23503') { // Foreign key violation
+    throw new NotFoundError('Referenced project not found');
+  } else {
+    logger.error('Database error', { error, query });
+    throw new DatabaseError('Failed to insert project', error);
+  }
+}
+```
+
+### Common PostgreSQL Error Codes
+- `23505` - Unique violation
+- `23503` - Foreign key violation
+- `23502` - Not null violation
+- `42P01` - Undefined table
+- `42703` - Undefined column
+
+## Best Practices
+
+1. **Always use parameterized queries** - Never concatenate user input into SQL
+2. **Close connections** - Use try/finally to ensure connections are released
+3. **Use transactions** - For operations that must succeed or fail together
+4. **Index wisely** - Add indexes for frequently queried columns
+5. **Limit result sets** - Always use LIMIT unless you truly need all rows
+6. **Monitor performance** - Use EXPLAIN ANALYZE for slow queries
+7. **Handle errors** - Catch and log database errors with context
+8. **Use connection pooling** - Don't create new connections per query
+9. **Validate input** - Check data before querying database
+10. **Keep migrations versioned** - Number migrations sequentially
+
+## Common Pitfalls to Avoid
+
+❌ **N+1 Queries** - Making separate queries in a loop
+```typescript
+// BAD
+for (const project of projects) {
+  const metrics = await getMetrics(project.id); // N+1 queries!
+}
+
+// GOOD - Use JOIN or batch query
+const projectsWithMetrics = await query(`
+  SELECT p.*, pm.stars_count
+  FROM projects p
+  LEFT JOIN project_metrics pm ON p.id = pm.project_id
+`);
+```
+
+❌ **Not handling NULL values**
+```typescript
+// BAD
+const stars = result.rows[0].stars_count; // Could be null!
+
+// GOOD
+const stars = result.rows[0]?.stars_count || 0;
+```
+
+❌ **Forgetting to release client in transactions**
+```typescript
+// BAD - Connection leak
+const client = await pool.connect();
+await client.query('BEGIN');
+// ... if error occurs here, client is never released
+
+// GOOD - Always release in finally
+try {
+  // transaction
+} finally {
+  client.release();
+}
+```

@@ -1,0 +1,668 @@
+---
+description: API development patterns and REST best practices
+globs:
+  - "src/routes/**/*.ts"
+  - "src/controllers/**/*.ts"
+  - "src/middleware/**/*.ts"
+alwaysApply: false
+---
+
+# API Development Rules
+
+## Express.js Patterns
+
+### Route Definition
+```typescript
+// src/routes/projects.routes.ts
+import { Router } from 'express';
+import * as projectController from '@/controllers/projects.controller';
+import { validateProjectQuery } from '@/middleware/validators';
+
+const router = Router();
+
+// List projects with pagination
+router.get('/', validateProjectQuery, projectController.getProjects);
+
+// Get single project
+router.get('/:id', projectController.getProjectById);
+
+// Get project history
+router.get('/:id/history', projectController.getProjectHistory);
+
+export default router;
+```
+
+### Controller Pattern
+```typescript
+// src/controllers/projects.controller.ts
+import { Request, Response, NextFunction } from 'express';
+import { ProjectService } from '@/services/project.service';
+
+const projectService = new ProjectService();
+
+// Always use async/await
+// Always pass errors to next() for error handling middleware
+export const getProjects = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    // 1. Extract and validate parameters
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+    
+    // 2. Call service layer
+    const result = await projectService.getProjects({
+      page,
+      limit,
+      language: req.query.language as string,
+      topics: req.query.topics as string[],
+    });
+    
+    // 3. Format and send response
+    res.json({
+      data: result.projects,
+      pagination: {
+        page,
+        limit,
+        total: result.total,
+        totalPages: Math.ceil(result.total / limit),
+      },
+    });
+  } catch (error) {
+    // 4. Pass errors to error handler
+    next(error);
+  }
+};
+
+export const getProjectById = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const id = parseInt(req.params.id);
+    
+    // Validate parameter
+    if (isNaN(id) || id < 1) {
+      return res.status(400).json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Invalid project ID',
+        },
+      });
+    }
+    
+    const project = await projectService.getProjectById(id);
+    
+    // Handle not found
+    if (!project) {
+      return res.status(404).json({
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Project not found',
+        },
+      });
+    }
+    
+    res.json(project);
+  } catch (error) {
+    next(error);
+  }
+};
+```
+
+## Request Validation
+
+### Input Validation Middleware
+```typescript
+// src/middleware/validators.ts
+import { Request, Response, NextFunction } from 'express';
+
+export const validateProjectQuery = (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  const errors: string[] = [];
+
+  // Validate page
+  if (req.query.page) {
+    const page = parseInt(req.query.page as string);
+    if (isNaN(page) || page < 1) {
+      errors.push('page must be a positive integer');
+    }
+  }
+
+  // Validate limit
+  if (req.query.limit) {
+    const limit = parseInt(req.query.limit as string);
+    if (isNaN(limit) || limit < 1 || limit > 100) {
+      errors.push('limit must be between 1 and 100');
+    }
+  }
+
+  // Validate sortBy
+  const validSortFields = ['stars', 'created', 'updated', 'velocity'];
+  if (req.query.sortBy && !validSortFields.includes(req.query.sortBy as string)) {
+    errors.push(`sortBy must be one of: ${validSortFields.join(', ')}`);
+  }
+
+  // Validate order
+  if (req.query.order && !['asc', 'desc'].includes(req.query.order as string)) {
+    errors.push('order must be either asc or desc');
+  }
+
+  if (errors.length > 0) {
+    return res.status(400).json({
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid query parameters',
+        details: errors,
+      },
+    });
+  }
+
+  next();
+};
+```
+
+### Using Zod for Validation
+```typescript
+import { z } from 'zod';
+
+const projectQuerySchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  language: z.string().optional(),
+  topics: z.array(z.string()).optional(),
+  sortBy: z.enum(['stars', 'created', 'updated', 'velocity']).default('stars'),
+  order: z.enum(['asc', 'desc']).default('desc'),
+});
+
+export const validateProjectQuery = (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    req.query = projectQuerySchema.parse(req.query);
+    next();
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Invalid query parameters',
+          details: error.errors,
+        },
+      });
+    }
+    next(error);
+  }
+};
+```
+
+## Error Handling
+
+### Global Error Handler Middleware
+```typescript
+// src/middleware/error-handler.ts
+import { Request, Response, NextFunction } from 'express';
+import { logger } from '@/utils/logger';
+
+// Custom error classes
+export class AppError extends Error {
+  constructor(
+    public statusCode: number,
+    public code: string,
+    message: string,
+    public details?: any
+  ) {
+    super(message);
+    this.name = this.constructor.name;
+    Error.captureStackTrace(this, this.constructor);
+  }
+}
+
+export class ValidationError extends AppError {
+  constructor(message: string, details?: any) {
+    super(400, 'VALIDATION_ERROR', message, details);
+  }
+}
+
+export class NotFoundError extends AppError {
+  constructor(message: string) {
+    super(404, 'NOT_FOUND', message);
+  }
+}
+
+export class RateLimitError extends AppError {
+  constructor(message: string) {
+    super(429, 'RATE_LIMIT_EXCEEDED', message);
+  }
+}
+
+// Error handler middleware (must be last)
+export const errorHandler = (
+  error: Error,
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  // Log error
+  logger.error('Request error', {
+    error: error.message,
+    stack: error.stack,
+    path: req.path,
+    method: req.method,
+  });
+
+  // Handle known errors
+  if (error instanceof AppError) {
+    return res.status(error.statusCode).json({
+      error: {
+        code: error.code,
+        message: error.message,
+        details: error.details,
+      },
+    });
+  }
+
+  // Handle unknown errors
+  res.status(500).json({
+    error: {
+      code: 'INTERNAL_ERROR',
+      message: 'An unexpected error occurred',
+    },
+  });
+};
+```
+
+## Response Formatting
+
+### Success Responses
+```typescript
+// List response with pagination
+{
+  "data": [
+    { "id": 1, "name": "project1" },
+    { "id": 2, "name": "project2" }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 50,
+    "total": 150,
+    "totalPages": 3
+  }
+}
+
+// Single resource response
+{
+  "id": 1,
+  "name": "project1",
+  "description": "...",
+  "currentMetrics": {
+    "stars": 1000,
+    "forks": 100
+  }
+}
+```
+
+### Error Responses
+```typescript
+// Validation error
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Invalid query parameters",
+    "details": {
+      "page": "must be a positive integer"
+    }
+  }
+}
+
+// Not found error
+{
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "Project not found"
+  }
+}
+
+// Rate limit error
+{
+  "error": {
+    "code": "RATE_LIMIT_EXCEEDED",
+    "message": "Too many requests. Please try again later."
+  }
+}
+```
+
+## HTTP Status Codes
+
+Use appropriate status codes:
+
+- **200 OK** - Successful GET, PUT, PATCH
+- **201 Created** - Successful POST that creates a resource
+- **204 No Content** - Successful DELETE
+- **400 Bad Request** - Invalid input/validation error
+- **401 Unauthorized** - Authentication required
+- **403 Forbidden** - Authenticated but not authorized
+- **404 Not Found** - Resource doesn't exist
+- **429 Too Many Requests** - Rate limit exceeded
+- **500 Internal Server Error** - Unexpected server error
+
+## Middleware
+
+### Request Logger
+```typescript
+// src/middleware/request-logger.ts
+import { Request, Response, NextFunction } from 'express';
+import { logger } from '@/utils/logger';
+
+export const requestLogger = (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  const start = Date.now();
+
+  // Log when response is finished
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    logger.info('HTTP Request', {
+      method: req.method,
+      path: req.path,
+      statusCode: res.statusCode,
+      duration,
+      ip: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+  });
+
+  next();
+};
+```
+
+### Rate Limiter
+```typescript
+// src/middleware/rate-limiter.ts
+import rateLimit from 'express-rate-limit';
+import { RateLimitError } from './error-handler';
+
+export const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per window
+  handler: (req, res) => {
+    throw new RateLimitError('Too many requests from this IP');
+  },
+  standardHeaders: true, // Return rate limit info in headers
+  legacyHeaders: false,
+});
+
+// Stricter limit for specific endpoints
+export const searchLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  handler: (req, res) => {
+    throw new RateLimitError('Too many search requests');
+  },
+});
+```
+
+### Authentication (Optional)
+```typescript
+// src/middleware/auth.ts
+import { Request, Response, NextFunction } from 'express';
+
+export const authenticateToken = (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+
+  if (!token) {
+    return res.status(401).json({
+      error: {
+        code: 'UNAUTHORIZED',
+        message: 'Authentication required',
+      },
+    });
+  }
+
+  // Verify token (implementation depends on auth strategy)
+  if (token !== process.env.API_SECRET) {
+    return res.status(403).json({
+      error: {
+        code: 'FORBIDDEN',
+        message: 'Invalid token',
+      },
+    });
+  }
+
+  next();
+};
+```
+
+## API Versioning
+
+### Route Organization
+```typescript
+// src/routes/index.ts
+import { Router } from 'express';
+import projectsRoutes from './projects.routes';
+import trendingRoutes from './trending.routes';
+import analyticsRoutes from './analytics.routes';
+import adminRoutes from './admin.routes';
+import { authenticateToken } from '@/middleware/auth';
+
+const router = Router();
+
+// Public routes
+router.use('/projects', projectsRoutes);
+router.use('/trending', trendingRoutes);
+router.use('/analytics', analyticsRoutes);
+
+// Protected routes
+router.use('/admin', authenticateToken, adminRoutes);
+
+export default router;
+```
+
+```typescript
+// src/app.ts
+import routes from '@/routes';
+
+app.use('/api/v1', routes);
+```
+
+## Pagination
+
+### Consistent Pagination Pattern
+```typescript
+// Extract pagination params
+const page = parseInt(req.query.page as string) || 1;
+const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+const offset = (page - 1) * limit;
+
+// Query with pagination
+const projects = await projectService.getProjects({ limit, offset });
+const total = await projectService.countProjects();
+
+// Response format
+res.json({
+  data: projects,
+  pagination: {
+    page,
+    limit,
+    total,
+    totalPages: Math.ceil(total / limit),
+    hasNext: page * limit < total,
+    hasPrev: page > 1,
+  },
+});
+```
+
+## Query Parameters
+
+### Filtering
+```typescript
+// Support multiple filter types
+// GET /api/v1/projects?language=Python&topics=ai,ml&minStars=1000
+
+const filters = {
+  language: req.query.language,
+  topics: req.query.topics ? (req.query.topics as string).split(',') : undefined,
+  minStars: req.query.minStars ? parseInt(req.query.minStars as string) : undefined,
+};
+```
+
+### Sorting
+```typescript
+// GET /api/v1/projects?sortBy=stars&order=desc
+
+const sortBy = req.query.sortBy || 'created_at';
+const order = req.query.order === 'asc' ? 'ASC' : 'DESC';
+```
+
+### Date Ranges
+```typescript
+// GET /api/v1/projects/1/history?from=2025-11-01&to=2025-11-15
+
+const from = req.query.from ? new Date(req.query.from as string) : undefined;
+const to = req.query.to ? new Date(req.query.to as string) : undefined;
+
+if (from && isNaN(from.getTime())) {
+  throw new ValidationError('Invalid from date');
+}
+```
+
+## CORS Configuration
+
+```typescript
+// src/app.ts
+import cors from 'cors';
+
+const corsOptions = {
+  origin: process.env.NODE_ENV === 'production' 
+    ? ['https://yourdomain.com']
+    : '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
+```
+
+## Security Headers
+
+```typescript
+import helmet from 'helmet';
+
+app.use(helmet());
+
+// Additional security headers
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  next();
+});
+```
+
+## Testing Controllers
+
+```typescript
+// tests/integration/projects.test.ts
+import request from 'supertest';
+import app from '@/app';
+
+describe('GET /api/v1/projects', () => {
+  test('should return projects with pagination', async () => {
+    const response = await request(app)
+      .get('/api/v1/projects')
+      .query({ page: 1, limit: 10 })
+      .expect(200);
+
+    expect(response.body).toHaveProperty('data');
+    expect(response.body).toHaveProperty('pagination');
+    expect(Array.isArray(response.body.data)).toBe(true);
+  });
+
+  test('should return 400 for invalid page', async () => {
+    const response = await request(app)
+      .get('/api/v1/projects')
+      .query({ page: -1 })
+      .expect(400);
+
+    expect(response.body.error.code).toBe('VALIDATION_ERROR');
+  });
+});
+```
+
+## Best Practices
+
+1. **Always validate input** - Don't trust client data
+2. **Use status codes correctly** - Help clients understand responses
+3. **Implement rate limiting** - Protect against abuse
+4. **Log all errors** - With context for debugging
+5. **Return consistent error format** - Make client integration easier
+6. **Use middleware** - For cross-cutting concerns
+7. **Implement pagination** - For list endpoints
+8. **Version your API** - Allow for future changes
+9. **Document endpoints** - Keep API documentation updated
+10. **Test thoroughly** - Integration tests for all endpoints
+
+## Common Pitfalls to Avoid
+
+❌ **Not handling async errors**
+```typescript
+// BAD - Unhandled promise rejection
+app.get('/projects', async (req, res) => {
+  const projects = await projectService.getProjects(); // If this throws, it crashes
+  res.json(projects);
+});
+
+// GOOD - Wrapped in try-catch
+app.get('/projects', async (req, res, next) => {
+  try {
+    const projects = await projectService.getProjects();
+    res.json(projects);
+  } catch (error) {
+    next(error);
+  }
+});
+```
+
+❌ **Sending response multiple times**
+```typescript
+// BAD
+if (!project) {
+  res.status(404).json({ error: 'Not found' });
+}
+res.json(project); // ERROR: Headers already sent
+
+// GOOD - Use return
+if (!project) {
+  return res.status(404).json({ error: 'Not found' });
+}
+res.json(project);
+```
+
+❌ **Not validating user input**
+```typescript
+// BAD
+const id = req.params.id; // Could be anything!
+const project = await query('SELECT * FROM projects WHERE id = ' + id); // SQL injection!
+
+// GOOD
+const id = parseInt(req.params.id);
+if (isNaN(id)) {
+  return res.status(400).json({ error: 'Invalid ID' });
+}
+```
