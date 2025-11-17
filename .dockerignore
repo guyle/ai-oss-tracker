@@ -1,0 +1,42 @@
+# Backend .dockerignore
+node_modules
+npm-debug.log
+dist
+.env
+.env.local
+.env.*.local
+
+# Git
+.git
+.gitignore
+
+# Documentation
+README.md
+docs/
+*.md
+
+# Tests
+tests/
+coverage/
+jest.config.js
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# CI/CD
+.github/
+
+# Docker
+docker-compose*.yml
+Dockerfile
+.dockerignore
+
+# Web frontend
+web/
+
+# Scripts
+scripts/
+
