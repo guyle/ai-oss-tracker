@@ -27,6 +27,7 @@ describe('Projects API Integration Tests', () => {
   // Close connections
   afterAll(async () => {
     await closeTestPool();
+    await closeDatabasePool();
   });
 
   describe('GET /api/v1/projects', () => {

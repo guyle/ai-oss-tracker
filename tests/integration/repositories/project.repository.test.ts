@@ -1,5 +1,6 @@
 // Project Repository integration tests
 import projectRepository from '@/repositories/project.repository';
+import { closeDatabasePool } from '@/config/database';
 import {
   initTestDatabase,
   truncateTables,
@@ -24,6 +25,7 @@ describe('ProjectRepository Integration Tests', () => {
   // Close connections
   afterAll(async () => {
     await closeTestPool();
+    await closeDatabasePool();
   });
 
   describe('findById()', () => {
