@@ -60,7 +60,7 @@ describe('ProjectRepository Integration Tests', () => {
 
       // Assert: All fields mapped correctly
       expect(result).toMatchObject({
-        github_id: mockProjects.pytorch.github_id,
+        github_id: String(mockProjects.pytorch.github_id),
         full_name: mockProjects.pytorch.full_name,
         name: mockProjects.pytorch.name,
         description: mockProjects.pytorch.description,
@@ -88,7 +88,7 @@ describe('ProjectRepository Integration Tests', () => {
 
       // Assert: Project returned
       expect(result).not.toBeNull();
-      expect(result?.github_id).toBe(mockProjects.langchain.github_id);
+      expect(result?.github_id).toBe(String(mockProjects.langchain.github_id));
       expect(result?.full_name).toBe('langchain-ai/langchain');
     });
 
@@ -154,13 +154,13 @@ describe('ProjectRepository Integration Tests', () => {
 
       // Assert: Project created
       expect(result.id).toBeDefined();
-      expect(result.github_id).toBe(12345);
+      expect(result.github_id).toBe('12345');
       expect(result.full_name).toBe('test/new-project');
 
       // Verify in database
       const dbProject = await getProjectByFullName('test/new-project');
       expect(dbProject).not.toBeNull();
-      expect(dbProject.github_id).toBe(12345);
+      expect(dbProject.github_id).toBe('12345');
     });
 
     it('should update existing project on conflict', async () => {
@@ -277,10 +277,10 @@ describe('ProjectRepository Integration Tests', () => {
 
     it('should apply pagination', async () => {
       // Act: Get first page
-      const page1 = await projectRepository.findAll({}, { page: 1, limit: 2 });
+      const page1 = await projectRepository.findAll({}, { page: 1, limit: 2, offset: 0 });
 
       // Act: Get second page
-      const page2 = await projectRepository.findAll({}, { page: 2, limit: 2 });
+      const page2 = await projectRepository.findAll({}, { page: 2, limit: 2, offset: 2 });
 
       // Assert: Different projects on each page
       expect(page1.length).toBe(2);

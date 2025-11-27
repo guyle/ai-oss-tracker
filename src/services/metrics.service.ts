@@ -56,9 +56,10 @@ export class MetricsService {
   async getMetricsHistory(
     projectId: number,
     fromDate?: Date,
-    toDate?: Date
+    toDate?: Date,
+    limit?: number
   ): Promise<ProjectMetrics[]> {
-    return metricsRepository.getHistory(projectId, fromDate, toDate);
+    return metricsRepository.getHistory(projectId, fromDate, toDate, limit);
   }
 
   /**

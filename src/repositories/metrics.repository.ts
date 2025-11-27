@@ -46,7 +46,8 @@ export class MetricsRepository {
   async getHistory(
     projectId: number,
     fromDate?: Date,
-    toDate?: Date
+    toDate?: Date,
+    limit?: number
   ): Promise<ProjectMetrics[]> {
     let sql = 'SELECT * FROM project_metrics WHERE project_id = $1';
     const params: unknown[] = [projectId];
@@ -65,6 +66,11 @@ export class MetricsRepository {
     }
 
     sql += ' ORDER BY recorded_at ASC';
+
+    if (limit) {
+      sql += ` LIMIT $${paramCount}`;
+      params.push(limit);
+    }
 
     const result = await query<ProjectMetrics>(sql, params);
     return result.rows;

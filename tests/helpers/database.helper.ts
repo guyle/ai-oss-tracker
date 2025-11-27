@@ -71,12 +71,17 @@ export async function seedProjects(projects: Array<{
   github_id: number;
   full_name: string;
   name: string;
-  description?: string;
+  description?: string | null;
   html_url: string;
-  language?: string;
+  homepage?: string | null;
+  language?: string | null;
   topics?: string[];
   created_at?: Date;
   updated_at?: Date;
+  pushed_at?: Date | null;
+  is_fork?: boolean;
+  is_archived?: boolean;
+  license?: string | null;
 }>): Promise<void> {
   const pool = createTestPool();
   
@@ -84,8 +89,9 @@ export async function seedProjects(projects: Array<{
     await pool.query(
       `INSERT INTO projects (
         github_id, full_name, name, description, html_url, 
-        language, topics, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        homepage, language, topics, created_at, updated_at,
+        pushed_at, is_fork, is_archived, license
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       ON CONFLICT (github_id) DO NOTHING`,
       [
         project.github_id,
@@ -93,10 +99,15 @@ export async function seedProjects(projects: Array<{
         project.name,
         project.description || null,
         project.html_url,
+        project.homepage || null,
         project.language || null,
         project.topics || [],
         project.created_at || new Date(),
         project.updated_at || new Date(),
+        project.pushed_at || null,
+        project.is_fork || false,
+        project.is_archived || false,
+        project.license || null,
       ]
     );
   }

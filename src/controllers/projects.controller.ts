@@ -11,14 +11,15 @@ import { ApiResponse, ProjectWithMetrics, ProjectMetrics } from '@/models/types'
  */
 export const getProjects = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const page = parseInt(req.query.page as string) || 1;
+    const page = parseInt(req.query.page as string);
+    const validatedPage = isNaN(page) ? 1 : page;
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
 
-    if (page < 1) {
+    if (validatedPage < 1) {
       throw new ValidationError('Page must be >= 1');
     }
 
-    const offset = (page - 1) * limit;
+    const offset = (validatedPage - 1) * limit;
 
     const filters = {
       language: req.query.language as string | undefined,
@@ -32,7 +33,7 @@ export const getProjects = async (req: Request, res: Response, next: NextFunctio
     };
 
     const { projects, total } = await projectService.getAllProjects(filters, {
-      page,
+      page: validatedPage,
       limit,
       offset,
     });
@@ -61,7 +62,7 @@ export const getProjects = async (req: Request, res: Response, next: NextFunctio
     const response: ApiResponse<typeof projectsWithMetrics> = {
       data: projectsWithMetrics,
       pagination: {
-        page,
+        page: validatedPage,
         limit,
         total,
         totalPages: Math.ceil(total / limit),
@@ -141,8 +142,9 @@ export const getProjectHistory = async (req: Request, res: Response, next: NextF
 
     const fromDate = req.query.from ? new Date(req.query.from as string) : undefined;
     const toDate = req.query.to ? new Date(req.query.to as string) : undefined;
+    const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
 
-    const history = await metricsService.getMetricsHistory(id, fromDate, toDate);
+    const history = await metricsService.getMetricsHistory(id, fromDate, toDate, limit);
 
     const project = await projectService.getProject(id);
 
