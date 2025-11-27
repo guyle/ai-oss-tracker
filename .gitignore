@@ -16,6 +16,7 @@ build/
 
 # NPM configuration (keep .npmrc in git)
 # .npmrc should be committed to ensure consistent behavior
+.npmrc-secret/
 
 # Logs
 logs/

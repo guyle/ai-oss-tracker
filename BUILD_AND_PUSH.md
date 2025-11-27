@@ -183,29 +183,14 @@ docker system info | grep Registry
 
 ## CI/CD Integration
 
-For automated builds in GitHub Actions, use the `jfrog/fly-action@v1`:
+Automated builds are handled by GitHub Actions using OIDC for secure, secret-less authentication.
 
-```yaml
-name: Build and Push to Fly
+See [.github/workflows/README.md](.github/workflows/README.md) for full documentation on:
+- The Build and Release workflow
+- Tagging strategies
+- OIDC authentication details
 
-on:
-  push:
-    branches: [main]
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Setup JFrog Fly
-        uses: jfrog/fly-action@v1
-        
-      - name: Build and Push Backend
-        run: |
-          docker build -t guyle.jfrog.io/docker/ai-tracker-api:${{ github.sha }} .
-          docker push guyle.jfrog.io/docker/ai-tracker-api:${{ github.sha }}
-```
+The workflow file is located at: `.github/workflows/build-and-release.yml`
 
 ## Security Notes
 

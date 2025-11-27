@@ -1,0 +1,153 @@
+name: Build and Release to JFrog Fly
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Custom tag for images (default: latest)'
+        required: false
+        type: string
+
+env:
+  REGISTRY: guyle.jfrog.io
+  BACKEND_IMAGE: guyle.jfrog.io/docker/ai-tracker-api
+  FRONTEND_IMAGE: guyle.jfrog.io/docker/ai-tracker-web
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup JFrog Fly
+        uses: jfrog/fly-action@v1
+        with:
+          url: https://guyle.jfrog.io
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Run Tests
+        run: npm test
+
+  build-and-push:
+    name: Build and Push Docker Images
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup JFrog Fly
+        uses: jfrog/fly-action@v1
+        with:
+          url: https://guyle.jfrog.io
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract metadata for backend
+        id: meta-backend
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.BACKEND_IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event.inputs.tag != '' }}
+
+      - name: Extract metadata for frontend
+        id: meta-frontend
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.FRONTEND_IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event.inputs.tag != '' }}
+
+      - name: Prepare .npmrc for Docker builds
+        run: |
+          # JFrog Fly Action configures ~/.npmrc with OIDC tokens
+          # We copy it to a local directory to mount it as a Docker secret
+          mkdir -p .npmrc-secret
+          cp $HOME/.npmrc .npmrc-secret/.npmrc
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-backend.outputs.tags }}
+          labels: ${{ steps.meta-backend.outputs.labels }}
+          secrets: |
+            npmrc=.npmrc-secret/.npmrc
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./web
+          file: ./web/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-frontend.outputs.tags }}
+          labels: ${{ steps.meta-frontend.outputs.labels }}
+          secrets: |
+            npmrc=.npmrc-secret/.npmrc
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+      - name: Summary
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "## 🚀 Images Built and Pushed to JFrog Fly" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Backend API" >> $GITHUB_STEP_SUMMARY
+          echo "- Image: \`${{ env.BACKEND_IMAGE }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Tags: ${{ steps.meta-backend.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Frontend Web" >> $GITHUB_STEP_SUMMARY
+          echo "- Image: \`${{ env.FRONTEND_IMAGE }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Tags: ${{ steps.meta-frontend.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "View images: https://${{ env.REGISTRY }}" >> $GITHUB_STEP_SUMMARY
+
