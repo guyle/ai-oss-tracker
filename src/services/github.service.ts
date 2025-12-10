@@ -36,6 +36,38 @@ export class GitHubService {
   }
 
   /**
+   * Search for trending/new AI repositories (created in last 30 days)
+   */
+  async searchTrendingRepos(daysBack = 30, minStars = 50): Promise<GitHubRepoData[]> {
+    try {
+      const date = new Date();
+      date.setDate(date.getDate() - daysBack);
+      const createdAfter = date.toISOString().split('T')[0];
+      
+      const query = 'artificial intelligence OR ai OR mcp OR agents OR llm';
+      
+      logger.info('Searching for trending GitHub repositories', { createdAfter, minStars });
+
+      const { data } = await octokit.search.repos({
+        q: `${query} created:>${createdAfter} stars:>${minStars} archived:false`,
+        sort: 'stars',
+        order: 'desc',
+        per_page: 100,
+      });
+
+      logger.info('GitHub trending search completed', {
+        totalCount: data.total_count,
+        itemsReturned: data.items.length,
+      });
+
+      return data.items as unknown as GitHubRepoData[];
+    } catch (error) {
+      logger.error('GitHub trending search failed', { error });
+      return handleGitHubError(error);
+    }
+  }
+
+  /**
    * Get repository details
    */
   async getRepository(owner: string, repo: string): Promise<GitHubRepoData> {

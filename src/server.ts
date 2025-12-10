@@ -3,6 +3,7 @@ import app from './app';
 import { env } from '@/config/env';
 import { logger } from '@/utils/logger';
 import { checkDatabaseHealth, closeDatabasePool } from '@/config/database';
+import scheduler from '@/jobs/scheduler';
 
 const PORT = env.PORT;
 
@@ -20,6 +21,9 @@ const server = app.listen(PORT, async () => {
     logger.error('Please ensure PostgreSQL is running and DATABASE_URL is correct');
   }
 
+  // Start background jobs
+  scheduler.start();
+
   logger.info(`API available at http://localhost:${PORT}/api/v1`);
   logger.info(`Health check at http://localhost:${PORT}/health`);
 });
@@ -27,6 +31,9 @@ const server = app.listen(PORT, async () => {
 // Graceful shutdown
 const gracefulShutdown = async (signal: string) => {
   logger.info(`${signal} received, starting graceful shutdown`);
+
+  // Stop background jobs
+  scheduler.stop();
 
   server.close(async () => {
     logger.info('HTTP server closed');

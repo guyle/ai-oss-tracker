@@ -4,7 +4,7 @@
   "description": "Track trending AI open source projects on GitHub",
   "main": "dist/server.js",
   "scripts": {
-    "dev": "nodemon --watch src --exec ts-node -r tsconfig-paths/register src/server.ts",
+    "dev": "PORT=3001 nodemon --watch src --exec ts-node -r tsconfig-paths/register src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
     "clean": "rm -rf dist",

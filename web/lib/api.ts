@@ -12,7 +12,7 @@ import type {
 
 // Use relative URLs in browser to leverage Next.js proxy, absolute URLs on server
 const API_BASE_URL = typeof window === 'undefined' 
-  ? process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000'
+  ? process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'
   : ''; // Empty string for relative URLs in browser
 
 class ApiClient {
