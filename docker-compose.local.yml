@@ -1,3 +1,6 @@
+# Local development compose - builds from source using JFrog Fly
+# Usage: docker compose -f docker-compose.local.yml up --build
+
 services:
   # PostgreSQL Database
   postgres:
@@ -28,7 +31,7 @@ services:
     container_name: ai_tracker_api
     environment:
       DATABASE_URL: postgres://tracker_user:tracker_password@postgres:5432/ai_tracker
-      GITHUB_TOKEN: ${GITHUB_TOKEN:-your_github_token_here}
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
       PORT: 3001
       NODE_ENV: development
       LOG_LEVEL: debug
@@ -71,7 +74,7 @@ services:
 
 secrets:
   npmrc:
-    file: ~/.npmrc
+    file: ${HOME}/.npmrc
 
 volumes:
   postgres_data:

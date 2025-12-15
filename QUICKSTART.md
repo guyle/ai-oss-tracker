@@ -2,6 +2,47 @@
 
 Get the GitHub AI Trending Tracker up and running in 5 minutes!
 
+## 🐳 Option A: Full Stack with Docker (Recommended)
+
+Run everything in Docker with a single command:
+
+```bash
+# Set your GitHub token
+export GITHUB_TOKEN=your_github_token_here
+
+# Start all services (builds on first run)
+./scripts/run-local.sh --build
+
+# Or use docker compose directly
+docker compose -f docker-compose.local.yml up --build
+```
+
+**Services:**
+- Frontend: http://localhost:3000
+- Backend API: http://localhost:3001
+- PostgreSQL: localhost:5432
+
+**Commands:**
+```bash
+# Start services
+./scripts/run-local.sh
+
+# Rebuild and start
+./scripts/run-local.sh --build
+
+# Stop services
+./scripts/run-local.sh --down
+
+# View logs
+docker compose -f docker-compose.local.yml logs -f
+```
+
+Skip to [Step 7](#step-7-seed-initial-data-optional) to seed data.
+
+---
+
+## Option B: Local Development (Manual Setup)
+
 ## Step 1: Install Dependencies
 
 **Backend:**

@@ -46,3 +46,6 @@ backup.sql
 *.temp
 .cache/
 
+# Kubernetes local deployment (contains environment-specific values)
+k8s/deployment.yaml
+
